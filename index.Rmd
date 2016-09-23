@@ -1,0 +1,140 @@
+---
+title: "Classification of Weight Lifting Exercises"
+subtitle: "Practical Machine Learning Course Project"
+author: "chris-sms"
+date: "September 22, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+I evaluated accelerometer data from the Human Activity Recognition project (http://groupware.les.inf.puc-rio.br/har) collected during weightlifting exercises performed by 6 subjects.  Each subject performed the exercise in one of 5 ways, either correctly (Class A), or incorrectly with one of 4 prescribed mistake modes (Class B-E).  Using a training data set consisting of 19,622 accelerometer data records, I developed a machine learning classification algorithm to classify each observation as belonging to one of Classes A-E.
+
+The algorithm was designed according to the following procedure:
+
+1. Variable Selection - 159 possible predictor variables were examined, and from these, 14 were selected for inclusion the prediction model based on their variable importance in the classification.
+
+2. Model Selection - 4 models (Recursive Partitioning, Gradient Boosted Classification Trees, Random Forest Classification, and Random Forest Using Principal Components) were evaluated using cross-validation for possible use.  The Gradient Boosted Classification Trees model was selected for the final prediction algorithm based on its high accuracy rate and relatively fast runtime.
+
+3. Prediction - The selected model was trained on the full training set and used to predict 20 test samples.
+
+In cross-validation, the selected model showed an accuracy rate of 99.4%.  In testing, the model predicted 100% of the 20 test samples correctly.
+
+## Background and Data Source
+
+This project utilizes data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to classify barbell lifts performed by those participants.  The data for this project come from the following source.  The authors have been very generous in allowing their data to be used for this assignment.
+
+Source:  Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz4Ky3NUaCU
+
+Six young, healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+Training data: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+Testing data: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Variable Selection
+
+159 possible predictor variables were examined, and from these, 100 were eliminated because they did not contain values in the testing dataset (i.e., they were NA for all observations).  These variables also contained NA values in the training dataset for most observations.  Many of these variables were summary statistics (e.g., skewness, kurtosis, max, var, etc.) that were only reported once per exercise window.
+
+The remaining 59 predictors were then evaluated for variable importance in a test model.  I used 4-fold cross-validation was used to train the model.  Of the 59 variables, 14 variables were shown to have nonzero variable importance.  The variables with zero importance were eliminated, resulting in a new data set with 14 predictors and one outcome variable.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+# install.packages("RANN")
+library(RANN)
+library(caret)
+```
+```{r,message=FALSE,cache=TRUE}
+# Load Raw Data
+train = read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",na.strings=c("","NA"))
+test = read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",na.strings=c("","NA"))
+# Eliminate predictor variables which contain 100% NAs in the testing dataset.
+# These should be used for training because they are not available for prediction.
+testing_nas<-colnames(test[,colSums(is.na(test))==20])
+training_rmna<-train[,!names(train)%in%testing_nas]
+# Indentify any additional variables in the training set which contain NAs (none identified).
+# Eliminate if necessary.
+training_nas<-colnames(training_rmna[ , colSums(is.na(training_rmna))>0])
+training_rmna<-training_rmna[,!names(training_rmna)%in%training_nas]
+# Eliminate categorical and timestamp variables.
+training_in<-training_rmna[,c(2,7:ncol(training_rmna))]
+# Investigate remaining variables for fit based on variable importance (cross-validated test).
+set.seed(100)
+modFit0<-train(classe~.,method="rpart",data=training_in,trControl=trainControl(method = "cv", number = 4))
+varImpList<-varImp(modFit0)
+varImpList
+# Select only variables with positive variable importance in test model.
+FeatureList <- rownames(varImpList$importance)[varImpList$importance > 0]
+training_imp<-training_in[,c(FeatureList,"classe")]
+# Also eliminate variables with zero importance from testing dataset
+names<-colnames(training_imp)
+names<-names[1:length(names)-1]
+testing_imp <- test[,names]
+```
+
+## Algorithm Selection
+
+Four algorithms were selected for comparison.  Each of the models is recognized as a well-known technique for supervised classification prediction.  I tested each algorithm using the training variable set created as described in the Variable Selection section of this report.  The algorithms were: (1) Recursive Partitioning (Classification Trees), (2) Gradient Boosted Classification Trees, (3) Random Forest Classification, and (4) Random Forest using Principal Components.  The 4th option, Random Forest using Principal Components, was selected as an option to reduce the number of predictors and thereby speed runtime for the random forecast model training, which I found to be time-consuming.  By pre-processing the data using PCA, I was able to reduce the number of training variables from 14 to 10 (at 95% variance threshold).  This resulted in a modest reduction in the training runtime as well.
+
+To test the algorithms, I used a cross-validation approach, partitioning the training data set into training and validation partitions using random sampling without replacement.  75% of the training set records were used for training, and 25% for validation.  I then compared the out-of-sample prediction accuracy levels for each model type.  The best performing models were Gradient Boosted Classification Trees, Random Forest, and Random Forecast using Principal Components.  The results are shown below.
+
+```{r,message=FALSE,warning=FALSE,cache=TRUE}
+# Create cross-validation partition for model testing
+set.seed(101)
+inTrain = createDataPartition(training_imp$classe, p = .75)[[1]]
+cvtraining = training_imp[inTrain,]
+cvtesting = training_imp[-inTrain,]
+# Test Model 1:  CART
+modFit1<-train(classe~.,method="rpart",data=cvtraining)
+Pred1<-predict(modFit1,cvtesting)
+confusionMatrix(Pred1,cvtesting$classe)$overall[1]
+# Test Model 2:  GBM
+modFit2<-train(classe~.,method="gbm",verbose=FALSE,data=cvtraining)
+Pred2<-predict(modFit2,cvtesting)
+confusionMatrix(Pred2,cvtesting$classe)$overall[1]
+# Test Model 3:  RF
+# Note: ntree=20 set due to system memory limitations - still gives strong OOB accuracy
+modFit3<-train(classe~.,method="rf",prox=TRUE,verbose=TRUE,ntree=20,data=cvtraining)
+Pred3<-predict(modFit3,cvtesting)
+confusionMatrix(Pred3,cvtesting$classe)$overall[1]
+# Test Model 4: RF w PCA
+preProc<-preProcess(cvtraining[,-15],method=c("center","scale","pca"))
+cvTrainPCA<-predict(preProc,cvtraining)
+cvTestPCA<-predict(preProc,cvtesting)
+modFit4<-train(classe~.,method="rf",prox=TRUE,ntree=20,data=cvTrainPCA)
+Pred4<-predict(modFit4,cvTestPCA)
+confusionMatrix(Pred4,cvTestPCA$classe)$overall[1]
+```
+
+Despite having a slightly lower accuracy rate than the random forest model, the gradient boosted classification tree model performed very well (99.4% out of sample accuracy) and was also very fast (much faster run time than random forest).  Based on its combination of speed and accuracy, I selected the gradient-boosted classifciation tree model as the final model to be used for prediction.  The full confusion matrix report for this model is shown below.
+
+```{r,message=FALSE,warning=FALSE,cache=TRUE}
+confusionMatrix(Pred2,cvtesting$classe)
+```
+
+## Prediction
+
+To generate the final predictions, I re-trained the gradient boosted classification tree model using the full training data set, and then generated predictions using the test data set.
+
+Based on my cross-validation result, I expect that this model will have an out-of-sample error rate of 1 - (out-of-sample accuracy) = (1-.9941) = 0.59.%
+
+```{r,message=FALSE,warning=FALSE,cache=TRUE}
+# Expected out of sample error rate
+OOSError<-1-confusionMatrix(Pred2,cvtesting$classe)$overall[1]
+OOSError
+```
+
+The final predictions for the testing data set are generated below.  In testing in the Coursera quiz, these predictions achieved an accuracy of 100%.
+
+```{r,message=FALSE,warning=FALSE,cache=TRUE}
+FinalModFit<-train(classe~.,method="gbm",verbose=FALSE,data=training_imp)
+FinalPred<-predict(FinalModFit,testing_imp)
+FinalPred
+```
